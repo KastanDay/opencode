@@ -109,6 +109,10 @@ Press `m` to mark a file reviewed and collapse its patch body. In all-files view
 
 Right-click a file in the sidebar or its diff heading for **Mark complete** (or **Mark incomplete**). This changes the same reviewed state as `m`. Completing a different file from its menu does not select it or advance the file currently being read.
 
+Large patches show a warning instead of rendering automatically. File names and change counts remain available. Press `enter` on the selected file, or click **Load anyway**, to render that patch; loading it may still freeze the terminal. This choice lasts only for the current diff result.
+
+All-files view also limits the combined preview size and defers later patches when that budget is reached. Press `s` to review those files one at a time without loading every patch. Individually oversized patches still require **Load anyway** in single-file view.
+
 The shifted `diff.help` alternatives support terminals that report the Shift modifier when you press `?`.
 
 | ID                      | Default             | Description                              |
@@ -132,6 +136,7 @@ The shifted `diff.help` alternatives support terminals that report the Shift mod
 | `diff.switch_source`    | `d`                 | Switch diff viewer source                |
 | `diff.toggle_view`      | `v`                 | Toggle diff viewer split or unified view |
 | `diff.mark_reviewed`    | `m`                 | Toggle selected diff file reviewed       |
+| `diff.load_patch`       | `return`            | Load deferred diff patch                 |
 | `diff.help`             | `?,shift+?,shift+/` | Show more diff viewer shortcuts          |
 
 The retired `diff.toggle`, `diff.expand`, `diff.expand_all`, `diff.collapse`, and `diff.switch_focus` configuration entries are still accepted, but no longer register shortcuts.

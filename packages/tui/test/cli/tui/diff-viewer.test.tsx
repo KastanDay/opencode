@@ -80,6 +80,192 @@ test("shows an error instead of an empty diff when loading fails", async () => {
   }
 })
 
+test.each([60, 160])(
+  "large generated diffs stay unmounted while ordinary files remain reviewable at %i columns",
+  async (width) => {
+    const viewer = await renderDiffViewer([largeDiff, hunkDiff[0]], { width, height: 30 })
+    try {
+      await viewer.app.waitForFrame((frame) => frame.includes("0001_snapshot.json"))
+      await viewer.app.flush()
+      expect(findDiffs(viewer.app.renderer.root)).toHaveLength(3)
+      expect(viewer.app.captureCharFrame()).toContain("Large diff hidden")
+      expect(viewer.app.captureCharFrame()).toContain("const first")
+      viewer.app.mockInput.pressKey("n")
+      await viewer.app.flush()
+      expect(viewer.app.captureCharFrame()).toContain("src/file.txt")
+    } finally {
+      viewer.app.renderer.destroy()
+    }
+  },
+)
+
+test("hunk-heavy diffs stay unmounted", async () => {
+  const viewer = await renderDiffViewer([{ ...hunkDiff[0], patch: hunkPatch(1000) }])
+  try {
+    await viewer.app.waitForFrame((frame) => frame.includes("src/file.txt"))
+    await viewer.app.flush()
+    expect(findDiffs(viewer.app.renderer.root)).toHaveLength(0)
+    expect(viewer.app.captureCharFrame()).toContain("Large diff hidden")
+  } finally {
+    viewer.app.renderer.destroy()
+  }
+})
+
+test.each(["keyboard", "mouse"] as const)(
+  "%s consent loads only one large patch and survives review toggles",
+  async (input) => {
+    const viewer = await renderDiffViewer([largeDiff, { ...largeDiff, file: "drizzle/meta/0002_snapshot.json" }])
+    try {
+      await viewer.app.waitForFrame((frame) => frame.includes("Large diff hidden"))
+      expect(findDiffs(viewer.app.renderer.root)).toHaveLength(0)
+      const load = viewer.app.renderer.root.findDescendantById("diff-load-patch-0")!
+      if (input === "mouse") {
+        await viewer.app.mockMouse.click(load.x, load.y, MouseButton.RIGHT)
+        await viewer.app.flush()
+        expect(findDiffs(viewer.app.renderer.root)).toHaveLength(0)
+        await viewer.app.mockMouse.click(load.x, load.y)
+        expect(viewer.app.renderer.getSelection()).toBeNull()
+      }
+      if (input === "keyboard") viewer.app.mockInput.pressEnter()
+      await viewer.app.waitForFrame((frame) => frame.includes("column_0"))
+      expect(findDiffs(viewer.app.renderer.root)).toHaveLength(1)
+      expect(viewer.app.renderer.root.findDescendantById("diff-load-patch-1")).toBeDefined()
+      viewer.app.mockInput.pressKey("m")
+      await viewer.app.flush()
+      expect(findDiffs(viewer.app.renderer.root)).toHaveLength(0)
+      viewer.app.mockInput.pressKey("m")
+      await viewer.app.waitForFrame((frame) => frame.includes("column_0"))
+      expect(findDiffs(viewer.app.renderer.root)).toHaveLength(1)
+      viewer.app.mockInput.pressKey("s")
+      await viewer.app.flush()
+      viewer.app.mockInput.pressKey("n")
+      await viewer.app.waitForFrame(
+        (frame) => frame.includes("0002_snapshot.json") && frame.includes("Large diff hidden"),
+      )
+      expect(findDiffs(viewer.app.renderer.root)).toHaveLength(0)
+      viewer.app.mockInput.pressKey("p")
+      await viewer.app.waitForFrame((frame) => frame.includes("column_0"))
+      expect(findDiffs(viewer.app.renderer.root)).toHaveLength(1)
+    } finally {
+      viewer.app.renderer.destroy()
+    }
+  },
+)
+
+test("switching sources and reopening the viewer require fresh large-patch consent", async () => {
+  const viewer = await renderDiffViewer([largeDiff], { width: 160 })
+  try {
+    await viewer.app.waitForFrame((frame) => frame.includes("Large diff hidden"))
+    viewer.app.mockInput.pressEnter()
+    await viewer.app.waitForFrame((frame) => frame.includes("column_0"))
+    viewer.app.mockInput.pressKey("d")
+    await viewer.app.waitForFrame((frame) => frame.includes("Switch source"))
+    viewer.app.mockInput.pressArrow("down")
+    viewer.app.mockInput.pressEnter()
+    await viewer.app.waitForFrame((frame) => frame.includes("Main branch") && frame.includes("Large diff hidden"))
+    expect(findDiffs(viewer.app.renderer.root)).toHaveLength(0)
+    viewer.app.mockInput.pressEnter()
+    await viewer.app.waitForFrame((frame) => frame.includes("column_0"))
+    await viewer.commands.get("diff.close")!.run()
+    await viewer.commands.get("diff.open")!.run()
+    await viewer.app.waitForFrame((frame) => frame.includes("Large diff hidden"))
+    expect(findDiffs(viewer.app.renderer.root)).toHaveLength(0)
+  } finally {
+    viewer.app.renderer.destroy()
+  }
+})
+
+test.each(["r", "none"])("deferred loading respects the %s keybinding override", async (binding) => {
+  const viewer = await renderDiffViewer([{ ...hunkDiff[0], patch: hunkPatch(101) }], {
+    keybinds: { "diff.load_patch": binding },
+  })
+  try {
+    await viewer.app.waitForFrame((frame) => frame.includes("Large diff hidden"))
+    viewer.app.mockInput.pressEnter()
+    await viewer.app.flush()
+    expect(findDiffs(viewer.app.renderer.root)).toHaveLength(0)
+    if (binding === "r") {
+      expect(viewer.app.captureCharFrame()).toContain("r load anyway")
+      viewer.app.mockInput.pressKey("r")
+    }
+    if (binding === "none") {
+      expect(viewer.app.captureCharFrame()).toContain("Load anyway")
+      const load = viewer.app.renderer.root.findDescendantById("diff-load-patch-0")!
+      await viewer.app.mockMouse.click(load.x, load.y)
+    }
+    await viewer.app.waitForFrame((frame) => frame.includes("context"))
+    expect(findDiffs(viewer.app.renderer.root)).toHaveLength(101)
+  } finally {
+    viewer.app.renderer.destroy()
+  }
+})
+
+test.each([
+  { label: "context lines", patch: "@@ -1,2501 +1,2501 @@\n" + " unchanged\n".repeat(2500) + "-old\n+new\n" },
+  { label: "long lines", patch: "@@ -1 +1 @@\n-old\n+" + "x".repeat(4001) + "\n" },
+])("large $label are guarded even when only one line changed", async ({ patch }) => {
+  const viewer = await renderDiffViewer([
+    { ...hunkDiff[0], additions: 1, deletions: 1, patch: "--- a/src/file.txt\n+++ b/src/file.txt\n" + patch },
+  ])
+  try {
+    await viewer.app.waitForFrame((frame) => frame.includes("Large diff hidden"))
+    expect(findDiffs(viewer.app.renderer.root)).toHaveLength(0)
+    viewer.app.mockInput.pressKey("s")
+    await viewer.app.flush()
+    expect(findDiffs(viewer.app.renderer.root)).toHaveLength(0)
+    viewer.app.mockInput.pressKey("c", { ctrl: true })
+    await viewer.app.waitFor(() => viewer.current().type !== "plugin")
+    expect(viewer.current()).toEqual(startRoute)
+  } finally {
+    viewer.app.renderer.destroy()
+  }
+})
+
+test("all-file previews have a cumulative budget while single-file navigation stays usable", async () => {
+  const viewer = await renderDiffViewer(
+    Array.from({ length: 7 }, (_, index) => ({
+      ...hunkDiff[0],
+      file: `file${index}.txt`,
+      patch: index === 6 ? hunkDiff[0].patch : hunkPatch(100),
+    })),
+    { width: 160, height: 30 },
+  )
+  try {
+    await viewer.app.waitForFrame((frame) => frame.includes("context"))
+    await viewer.app.flush()
+    expect(findDiffs(viewer.app.renderer.root)).toHaveLength(500)
+    const row = viewer.app.renderer.root.findDescendantById("diff-file-row-6")!
+    await viewer.app.mockMouse.click(row.x + 4, row.y)
+    await viewer.app.waitForFrame((frame) => frame.includes("Diff preview deferred"))
+    viewer.app.mockInput.pressKey("s")
+    await viewer.app.waitForFrame((frame) => frame.includes("const first"))
+    expect(findDiffs(viewer.app.renderer.root)).toHaveLength(3)
+    expect(viewer.app.renderer.root.findDescendantById("diff-file-header-6")).toBeDefined()
+    expect(viewer.app.captureCharFrame()).not.toContain("Diff preview deferred")
+    viewer.app.mockInput.pressKey("p")
+    await viewer.app.waitFor(() => Boolean(viewer.app.renderer.root.findDescendantById("diff-file-header-5")))
+    await viewer.app.flush()
+    expect(findDiffs(viewer.app.renderer.root)).toHaveLength(100)
+    viewer.app.mockInput.pressKey("s")
+    await viewer.app.waitForFrame((frame) => frame.includes("Diff preview deferred"))
+    viewer.app.mockInput.pressEnter()
+    await viewer.app.waitForFrame((frame) => frame.includes("context"))
+    expect(findDiffs(viewer.app.renderer.root)).toHaveLength(600)
+    expect(viewer.app.renderer.root.findDescendantById("diff-load-patch-6")).toBeDefined()
+    viewer.app.mockInput.pressKey("n")
+    await viewer.app.waitForFrame((frame) => frame.includes("Diff preview deferred"))
+    viewer.app.mockInput.pressEnter()
+    await viewer.app.waitForFrame((frame) => frame.includes("const first"))
+    expect(findDiffs(viewer.app.renderer.root)).toHaveLength(603)
+    viewer.app.mockInput.pressKey("s")
+    await viewer.app.flush()
+    expect(findDiffs(viewer.app.renderer.root)).toHaveLength(3)
+    expect(viewer.app.renderer.root.findDescendantById("diff-file-header-6")).toBeDefined()
+  } finally {
+    viewer.app.renderer.destroy()
+  }
+})
+
 test("uses the active location when opened outside a session", async () => {
   const viewer = await renderDiffViewer([], { initialRoute: { type: "home" } })
   try {
@@ -1300,6 +1486,29 @@ const manyDiffs = Array.from({ length: 40 }, (_, index) => ({
   ...hunkDiff[0],
   file: `file${String(index).padStart(2, "0")}.txt`,
 }))
+
+const largeDiff = {
+  file: "drizzle/meta/0001_snapshot.json",
+  additions: 20002,
+  deletions: 0,
+  status: "added",
+  patch:
+    "--- /dev/null\n+++ b/drizzle/meta/0001_snapshot.json\n@@ -0,0 +1,20002 @@\n+{\n" +
+    Array.from({ length: 20000 }, (_, index) => `+  "column_${index}": ${index}${index === 19999 ? "" : ","}`).join(
+      "\n",
+    ) +
+    "\n+}\n",
+}
+
+function hunkPatch(count: number) {
+  return (
+    "--- a/src/file.txt\n+++ b/src/file.txt\n" +
+    Array.from(
+      { length: count },
+      (_, index) => `@@ -${index * 20 + 1},3 +${index * 20 + 1},3 @@\n context\n-old\n+new\n context\n`,
+    ).join("")
+  )
+}
 
 function findScrollBox(root: Renderable, patches = true): ScrollBoxRenderable | undefined {
   const node = root.findDescendantById(patches ? "diff-patches" : "diff-files")

@@ -14,6 +14,7 @@ import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js"
 import { DiffViewerFileTree } from "./diff-viewer-file-tree"
 import { DiffViewerImage, isDiffImageFile } from "./diff-viewer-image"
+import { diffRenderSize } from "./diff-viewer-size"
 import { DialogSelect } from "../../ui/dialog-select"
 import { EmptyBorder } from "../../ui/border"
 import { FilePath } from "../../ui/file-path"
@@ -179,9 +180,25 @@ export function DiffViewerContent(props: {
   const [expandedFileNodes, setExpandedFileNodes] = createSignal<ReadonlySet<number>>(new Set())
   const [selectedFileIndex, setSelectedFileIndex] = createSignal<number | undefined>()
   const [reviewedFileNames, setReviewedFileNames] = createSignal<ReadonlySet<string>>(new Set())
+  const [loadedPatchFiles, setLoadedPatchFiles] = createSignal<ReadonlySet<DiffFile>>(new Set())
   const [fileMenu, setFileMenu] = createSignal<FileMenuState>()
   const patchScrollAcceleration = createMemo(() => getScrollAcceleration(config.data))
   const patchFileIndexes = createMemo(() => orderedPatchFileIndexes(flattenFileTree(fileTree())))
+  const patchSizes = createMemo(() => files().map((file) => diffRenderSize(file.patch)))
+  const deferredPatchFiles = createMemo(() => {
+    const total = { characters: 0, lines: 0, hunks: 0 }
+    return new Set(
+      patchFileIndexes().filter((fileIndex) => {
+        const size = patchSizes()[fileIndex]
+        if (size.large) return true
+        if (singlePatch()) return false
+        total.characters += size.characters
+        total.lines += size.lines
+        total.hunks += size.hunks
+        return total.characters > 1_000_000 || total.lines > 10_000 || total.hunks > 500
+      }),
+    )
+  })
   const helpShortcut = () => props.context.keymap.shortcuts("diff.help")[0]
   let scroll: ScrollBoxRenderable | undefined
   const patchNodeByFileIndex = new Map<number, BoxRenderable>()
@@ -196,6 +213,7 @@ export function DiffViewerContent(props: {
     setSelectedFileIndex(undefined)
     setSelectedHunk(undefined)
     setReviewedFileNames(new Set<string>())
+    setLoadedPatchFiles(new Set<DiffFile>())
     setFileMenu(undefined)
   })
 
@@ -326,7 +344,12 @@ export function DiffViewerContent(props: {
   })
 
   const ensureHighlightedPatchFile = () => {
-    const fileIndex = currentPatchFileIndex() ?? selectedFileIndex() ?? firstPatchFileIndex()
+    const selected = selectedFileIndex()
+    // Deferred cards can remain too short to scroll to the pane's top, even after loading.
+    const fileIndex =
+      selected !== undefined && deferredPatchFiles().has(selected)
+        ? selected
+        : (currentPatchFileIndex() ?? selected ?? firstPatchFileIndex())
     if (fileIndex === undefined) return
     selectPatchFile(fileIndex)
   }
@@ -404,6 +427,17 @@ export function DiffViewerContent(props: {
   const close = () => {
     dialog.clear()
     props.onClose()
+  }
+
+  const loadPatch = (fileIndex: number | undefined) => {
+    if (fileIndex === undefined || !deferredPatchFiles().has(fileIndex)) return
+    const file = files()[fileIndex]
+    if (!file.patch || reviewedFileNames().has(file.file) || loadedPatchFiles().has(file)) return
+    // Consent belongs to this result's file object, never a path reused by another source.
+    setLoadedPatchFiles((loaded) => new Set([...loaded, file]))
+    selectPatchFile(fileIndex)
+    setSelectedHunk(undefined)
+    scrollToPatchFileIndexAfterRender(fileIndex)
   }
 
   const commands: KeymapCommand[] = [
@@ -511,6 +545,14 @@ export function DiffViewerContent(props: {
       group: "VCS",
       run() {
         toggleFileReviewed(selectedFileIndex() ?? currentPatchFileIndex())
+      },
+    },
+    {
+      id: "diff.load_patch",
+      title: "Load deferred diff patch",
+      group: "VCS",
+      run() {
+        loadPatch(selectedFileIndex() ?? currentPatchFileIndex() ?? firstPatchFileIndex())
       },
     },
     {
@@ -820,6 +862,42 @@ export function DiffViewerContent(props: {
                                 <Match when={entry.file.status !== "deleted" && image() && props.loadImage}>
                                   {(load) => <DiffViewerImage file={entry.file.file} load={load()} />}
                                 </Match>
+                                <Match
+                                  when={
+                                    entry.file.patch &&
+                                    deferredPatchFiles().has(entry.fileIndex) &&
+                                    !loadedPatchFiles().has(entry.file)
+                                  }
+                                >
+                                  <box paddingLeft={1} paddingRight={1} paddingBottom={1} gap={1}>
+                                    <box>
+                                      <text fg={theme.text.feedback.warning.default}>
+                                        {patchSizes()[entry.fileIndex].large
+                                          ? "Large diff hidden"
+                                          : "Diff preview deferred"}
+                                      </text>
+                                      <text fg={theme.text.subdued}>
+                                        {patchSizes()[entry.fileIndex].large
+                                          ? "Rendering this patch may freeze the terminal."
+                                          : "Preview budget reached. Use single-file view to review one file at a time."}
+                                      </text>
+                                    </box>
+                                    <text
+                                      id={`diff-load-patch-${entry.fileIndex}`}
+                                      fg={theme.text.action.secondary.default}
+                                      selectable={false}
+                                      onMouseUp={(event) => {
+                                        if (event.button !== MouseButton.LEFT) return
+                                        event.stopPropagation()
+                                        loadPatch(entry.fileIndex)
+                                      }}
+                                    >
+                                      {props.context.keymap.shortcuts("diff.load_patch")[0]
+                                        ? `${props.context.keymap.shortcuts("diff.load_patch")[0]} load anyway`
+                                        : "Load anyway"}
+                                    </text>
+                                  </box>
+                                </Match>
                                 <Match when={entry.file.patch}>
                                   {(patch) => (
                                     <PatchDiff
@@ -972,6 +1050,7 @@ function DiffViewerHelpDialog(props: { context: Plugin.Context; single: boolean 
           label: props.single ? "Review + next / reopen" : "Review + collapse / reopen",
         },
         { shortcut: shortcut("diff.next_hunk", "diff.previous_hunk"), label: "Next / previous change" },
+        { shortcut: shortcut("diff.load_patch"), label: "Load deferred patch (may be slow)" },
         { shortcut: () => "right-click", label: "File menu (heading or tree)" },
       ],
     },
