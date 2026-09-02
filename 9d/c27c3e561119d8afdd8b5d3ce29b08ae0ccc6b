@@ -1,0 +1,19 @@
+packages/opencode/test/provider/provider.test.ts
+  s_3ae5b7e1d39256::t_68296a09b2e661 1551-1575
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9dc27c3e561119d8afdd8b5d3ce29b08ae0ccc6b",
+  "prompts": {},
+  "sessions": {
+    "s_3ae5b7e1d39256": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fa123e01cffeFUP0YNRTPiCfMI",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Kastan Day <kastanvday@gmail.com>"
+    }
+  }
+}
