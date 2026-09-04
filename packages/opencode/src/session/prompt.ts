@@ -1457,15 +1457,35 @@ const layer = Layer.effect(
           : yield* currentModel(input.sessionID)
         : taskModel
 
-      yield* plugin.trigger(
+      const messageID = input.messageID ?? MessageID.ascending()
+      const hook = yield* plugin.trigger(
         "command.execute.before",
-        { command: input.command, sessionID: input.sessionID, arguments: input.arguments },
-        { parts },
+        {
+          command: input.command,
+          sessionID: input.sessionID,
+          messageID,
+          arguments: input.arguments,
+          agent: userAgent,
+          model: userModel,
+          variant: input.variant,
+        },
+        { parts, handled: undefined },
       )
+
+      if (hook.handled) {
+        const result = yield* lastAssistant(input.sessionID)
+        yield* events.publish(Command.Event.Executed, {
+          name: input.command,
+          sessionID: input.sessionID,
+          arguments: input.arguments,
+          messageID,
+        })
+        return result
+      }
 
       const result = yield* prompt({
         sessionID: input.sessionID,
-        messageID: input.messageID,
+        messageID,
         model: userModel,
         agent: userAgent,
         parts,

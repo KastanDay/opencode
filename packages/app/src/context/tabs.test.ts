@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test"
 import { createRoot, getOwner, onCleanup } from "solid-js"
 import { createTabMemory } from "./tab-memory"
 import { nextTabAfterClose, pushClosedTab, removeClosedTabs, takeClosedTab, type ClosedTab } from "./closed-tabs"
-import type { SessionTab, Tab } from "./tabs"
+import { tabKey, type SessionTab, type Tab } from "./tabs"
 import { migrateTabs } from "./tab-migration"
 import type { ServerConnection } from "./server"
+import { insertAfterUnique } from "./tab-order"
 
 const server = "local\nhttp://localhost:4096" as ServerConnection.Key
 
@@ -121,5 +122,26 @@ describe("closed tab stack", () => {
     expect(nextTabAfterClose(tabs, 1, false)).toBeUndefined()
     expect(nextTabAfterClose(tabs, 1, true)).toEqual(sessionTab("c"))
     expect(nextTabAfterClose([sessionTab("a")], 0, true)).toBeNull()
+  })
+})
+
+describe("side tab insertion", () => {
+  const insertTabAfter = (tabs: readonly Tab[], next: Tab, after?: Tab) =>
+    insertAfterUnique(tabs, next, after, (left, right) => tabKey(left) === tabKey(right))
+
+  test("inserts a new session immediately after the active parent tab", () => {
+    const a = sessionTab("a")
+    const parent = sessionTab("parent")
+    const c = sessionTab("c")
+    const side = sessionTab("side")
+
+    expect(insertTabAfter([a, parent, c], side, parent)).toEqual([a, parent, side, c])
+  })
+
+  test("does not duplicate an existing side tab", () => {
+    const parent = sessionTab("parent")
+    const side = sessionTab("side")
+
+    expect(insertTabAfter([parent, side], side, parent)).toEqual([parent, side])
   })
 })

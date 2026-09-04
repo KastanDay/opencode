@@ -39,6 +39,7 @@ import type { PromptSession } from "@/context/prompt"
 import "./titlebar.css"
 import { newTabTooltipKeybind } from "./command-tooltip-keybind"
 import { normalizeSessionInfo } from "@/utils/session"
+import { matchesActiveSideParent, readSideSessionOpenDetail, SIDE_SESSION_OPEN_EVENT } from "@/utils/side-session"
 
 const legacyTitlebarHeight = 40
 const v2TitlebarHeight = 36
@@ -259,6 +260,18 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
               const detail = readSessionTabsRemovedDetail(event)
               if (!detail) return
               tabsStoreActions.removeSessions(detail)
+            })
+
+            makeEventListener(window, SIDE_SESSION_OPEN_EVENT, (event) => {
+              const detail = readSideSessionOpenDetail(event)
+              if (!detail) return
+              const route = layout.route()
+              if (route.type !== "session") return
+              const routeServer = route.server ?? server.key
+              if (!matchesActiveSideParent(detail, { server: routeServer, sessionID: route.sessionId })) return
+              const active = currentTab()
+              if (!active) return
+              tabsStoreActions.openSessionTabAfter({ server: detail.server, sessionId: detail.sessionID }, active)
             })
 
             const openNewTab = () => {

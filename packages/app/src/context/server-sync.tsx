@@ -59,6 +59,7 @@ import type {
 } from "@opencode-ai/client/promise"
 import { toggleMcp } from "./global-sync/mcp"
 import { createServerSession, type ServerSession } from "./server-session"
+import { notifySideSessionOpen, sideSessionOpenDetail } from "@/utils/side-session"
 
 type GlobalStore = {
   ready: boolean
@@ -290,6 +291,7 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
 
   const queryClient = useQueryClient()
   const homeSessions = createHomeSessionIndexCache(queryClient, ServerConnection.key(serverSDK.server))
+  const notifiedSideSessions = new Set<string>()
   const refreshProviders = () =>
     queryClient.refetchQueries({
       predicate: (query) => query.queryKey[0] === serverSDK.scope && query.queryKey[2] === "providers",
@@ -534,6 +536,15 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
     const event = e.details
     const eventType: string = event.type
     const recent = bootingRoot || Date.now() - bootedAt < 1500
+
+    if (event.type === "session.updated") {
+      const info = event.properties.info
+      const detail = sideSessionOpenDetail(ServerConnection.key(serverSDK.server), info)
+      if (detail && !notifiedSideSessions.has(info.id)) {
+        notifiedSideSessions.add(info.id)
+        notifySideSessionOpen(detail)
+      }
+    }
 
     if (event.current) session.applyV2(event.current)
     session.apply(event)
