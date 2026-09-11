@@ -14,6 +14,8 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { GlobalBus } from "@/bus/global"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { ModelV2 } from "@opencode-ai/core/model"
+import { ProviderV2 } from "@opencode-ai/core/provider"
 import { InstanceStore } from "@/project/instance-store"
 import { InstanceBootstrap } from "@/project/bootstrap"
 
@@ -220,12 +222,19 @@ describe("Session", () => {
     }),
   )
 
-  it.instance("persists metadata and copies it on fork by default", () =>
+  it.instance("copies session execution settings on fork by default", () =>
     Effect.gen(function* () {
       const session = yield* SessionNs.Service
       const meta = { source: "sdk", trace: { id: "abc" } }
-      const created = yield* Effect.acquireRelease(session.create({ title: "with-meta", metadata: meta }), (info) =>
-        session.remove(info.id).pipe(Effect.ignore),
+      const permission = [{ permission: "bash", pattern: "*", action: "allow" as const }]
+      const model = {
+        providerID: ProviderV2.ID.make("anthropic"),
+        id: ModelV2.ID.make("claude-sonnet-4-6"),
+        variant: "high",
+      }
+      const created = yield* Effect.acquireRelease(
+        session.create({ title: "with-settings", agent: "build", model, metadata: meta, permission }),
+        (info) => session.remove(info.id).pipe(Effect.ignore),
       )
       const saved = yield* session.get(created.id)
       const fork = yield* Effect.acquireRelease(session.fork({ sessionID: created.id }), (info) =>
@@ -233,8 +242,13 @@ describe("Session", () => {
       )
 
       expect(saved.metadata).toEqual(meta)
+      expect(fork.agent).toBe("build")
+      expect(fork.model).toEqual(model)
+      expect(fork.model).not.toBe(model)
       expect(fork.metadata).toEqual(meta)
       expect(fork.metadata).not.toBe(meta)
+      expect(fork.permission).toEqual(permission)
+      expect(fork.permission).not.toBe(permission)
     }),
   )
 

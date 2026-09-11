@@ -697,7 +697,10 @@ const layer: Layer.Layer<
         path: sessionPath(ctx.worktree, ctx.directory),
         workspaceID: original.workspaceID,
         title,
+        agent: original.agent,
+        model: original.model ? structuredClone(original.model) : undefined,
         metadata: structuredClone(original.metadata),
+        permission: original.permission ? structuredClone(original.permission) : undefined,
       })
       const msgs = yield* messages({ sessionID: input.sessionID })
       const idMap = new Map<string, MessageID>()

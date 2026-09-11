@@ -208,17 +208,21 @@ const promptRoot = LayerNode.group([
   RuntimeFlags.node,
 ])
 
-function makePrompt(input?: { mcpInstructions?: MCP.ServerInstructions[]; processor?: "blocking" }) {
-  const replacements = [
+function makePrompt(input?: {
+  mcpInstructions?: MCP.ServerInstructions[]
+  processor?: "blocking"
+  plugin?: Layer.Layer<Plugin.Service>
+}) {
+  const replacements: LayerNode.Replacements = [
     [SessionSummary.node, summary],
     [LSP.node, lsp],
     [MCP.node, makeMcp(input?.mcpInstructions)],
     [RuntimeFlags.node, runtimeFlags],
-  ] as const
-  if (input?.processor === "blocking") {
-    return LayerNode.compile(promptRoot, [...replacements, [SessionProcessor.node, blockingProcessor]])
-  }
-  return LayerNode.compile(promptRoot, replacements)
+  ]
+  const processorReplacement: LayerNode.Replacements =
+    input?.processor === "blocking" ? [[SessionProcessor.node, blockingProcessor]] : []
+  const pluginReplacement: LayerNode.Replacements = input?.plugin ? [[Plugin.node, input.plugin]] : []
+  return LayerNode.compile(promptRoot, [...replacements, ...processorReplacement, ...pluginReplacement])
 }
 
 function makeHttp(input?: { mcpInstructions?: MCP.ServerInstructions[]; processor?: "blocking" }) {
@@ -235,12 +239,42 @@ function makeHttp(input?: { mcpInstructions?: MCP.ServerInstructions[]; processo
   return LayerNode.compile(root, replacements)
 }
 
-function makeHttpNoLLMServer(input?: { mcpInstructions?: MCP.ServerInstructions[]; processor?: "blocking" }) {
+function makeHttpNoLLMServer(input?: {
+  mcpInstructions?: MCP.ServerInstructions[]
+  processor?: "blocking"
+  plugin?: Layer.Layer<Plugin.Service>
+}) {
   return makePrompt(input)
 }
 
+const handledCommandPlugin = Layer.mock(Plugin.Service)({
+  trigger: <Name extends string, Input, Output>(name: Name, input: Input, output: Output) =>
+    Effect.sync(() => {
+      if (name !== "command.execute.before") return output
+      const command = input as {
+        command: string
+        messageID?: string
+        agent?: string
+        model?: { providerID: string; modelID: string }
+        variant?: string
+      }
+      if (command.command !== "side") return output
+      if (!command.messageID) throw new Error("missing command message ID")
+      if (command.agent !== "build") throw new Error("missing resolved command agent")
+      if (command.model?.providerID !== "test" || command.model.modelID !== "test-model") {
+        throw new Error("missing resolved command model")
+      }
+      if (command.variant !== "high") throw new Error("missing command variant")
+      ;(output as { handled?: boolean }).handled = true
+      return output
+    }),
+  list: () => Effect.succeed([]),
+  init: () => Effect.void,
+})
+
 const it = testEffect(makeHttp())
 const noLLMServer = testEffect(makeHttpNoLLMServer())
+const handledCommand = testEffect(makeHttpNoLLMServer({ plugin: handledCommandPlugin }))
 const raceNoLLMServer = testEffect(makeHttpNoLLMServer({ processor: "blocking" }))
 const withMcpInstructions = testEffect(
   makeHttp({
@@ -2467,4 +2501,33 @@ noLLMServer.instance(
       }
     }),
   30_000,
+)
+
+handledCommand.instance(
+  "handled command receives its execution profile without adding a parent message",
+  () =>
+    Effect.gen(function* () {
+      const { prompt, sessions, chat } = yield* boot()
+      const seeded = yield* seed(chat.id, { finish: "stop" })
+      const before = yield* sessions.messages({ sessionID: chat.id })
+
+      const result = yield* prompt.command({
+        sessionID: chat.id,
+        command: "side",
+        arguments: "Why this implementation?",
+        agent: "build",
+        model: "test/test-model",
+        variant: "high",
+      })
+
+      const after = yield* sessions.messages({ sessionID: chat.id })
+      expect(result.info.id).toBe(seeded.assistant.id)
+      expect(after).toEqual(before)
+    }),
+  {
+    config: {
+      ...cfg,
+      command: { side: { template: "$ARGUMENTS", description: "Ask a side question" } },
+    },
+  },
 )
