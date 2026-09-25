@@ -1548,6 +1548,31 @@ test("models.dev reasoning options replace generated variants and unsupported to
   expect(models["gemini-3-pro-fast"].variants).toEqual(models.override.variants)
 })
 
+test("Workers AI models expose schema-derived reasoning efforts", () => {
+  const provider = {
+    id: "cloudflare-workers-ai",
+    name: "Cloudflare Workers AI",
+    env: ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_KEY"],
+    npm: "@ai-sdk/openai-compatible",
+    models: {
+      "@cf/zai-org/glm-5.3": {
+        id: "@cf/zai-org/glm-5.3",
+        name: "GLM 5.3",
+        reasoning: true,
+        reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }],
+        limit: { context: 1_310_720, output: 1_310_720 },
+      },
+    },
+  } as unknown as ModelsDev.Provider
+
+  const model = Provider.fromModelsDevProvider(provider).models["@cf/zai-org/glm-5.3"]
+  expect(model.variants).toEqual({
+    low: { reasoningEffort: "low" },
+    high: { reasoningEffort: "high" },
+    max: { reasoningEffort: "max" },
+  })
+})
+
 test("MERGE Gateway exposes declared effort variants without model-specific handling", () => {
   const provider = {
     id: "merge-gateway",
