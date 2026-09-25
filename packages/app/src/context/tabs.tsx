@@ -13,6 +13,7 @@ import { createTabMemory } from "./tab-memory"
 import { nextTabAfterClose, pushClosedTab, removeClosedTabs, takeClosedTab, type ClosedTab } from "./closed-tabs"
 import { createDraftPromptSession, type PromptModel } from "./prompt-state"
 import { migrateTabs } from "./tab-migration"
+import { insertAfterUnique } from "./tab-order"
 
 export type SessionTab = {
   type: "session"
@@ -188,6 +189,19 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
               tabs.push(next)
             }),
           )
+        })
+        return next
+      },
+      openSessionTabAfter: (tab: Omit<SessionTab, "type">, after?: Tab) => {
+        const next = { type: "session" as const, ...tab }
+        const existing = store.find((item) => tabKey(item) === tabKey(next))
+        if (existing) {
+          navigateTab(existing)
+          return existing
+        }
+        void startTransition(() => {
+          setStore((tabs) => insertAfterUnique(tabs, next, after, (left, right) => tabKey(left) === tabKey(right)))
+          navigateTab(next)
         })
         return next
       },

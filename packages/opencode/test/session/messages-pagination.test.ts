@@ -815,6 +815,25 @@ describe("MessageV2.filterCompacted", () => {
     }),
   )
 
+  it.instance("fork cutoff retains completed steps and excludes the current step", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const created = yield* session.create({})
+      const user = yield* addUser(created.id, "investigate")
+      yield* addAssistant(created.id, user, { finish: "tool-calls" })
+      yield* addAssistant(created.id, user, { finish: "tool-calls" })
+      const current = yield* addAssistant(created.id, user)
+
+      const forked = yield* session.fork({ sessionID: created.id, messageID: current })
+      const messages = yield* session.messages({ sessionID: forked.id })
+
+      expect(messages.map((message) => message.info.role)).toEqual(["user", "assistant", "assistant"])
+
+      yield* session.remove(forked.id)
+      yield* session.remove(created.id)
+    }),
+  )
+
   it.instance("retains an assistant tail when compaction starts inside a turn", () =>
     withSession(({ session, sessionID }) =>
       Effect.gen(function* () {
